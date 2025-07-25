@@ -1,74 +1,186 @@
 import pygame
 import random
+import math
 
 class Organism:
-    def __init__(self, x, y, color, speed=3, energy=1.0, size=20, vision_radius=100):
+    def __init__(self, x, y, color, speed=2.0, vision=100, mutations=None):
         self.x = x
         self.y = y
-        self.color = color
+
+        # ---- Niveles ----
+        self.size_step = 10
+        self.size_level = 1
+        self.max_level = 6
+        self.size = self.size_level * self.size_step
+
+        # ---- Base Stats ----
+        self.base_speed = speed
+        self.base_vision = vision
         self.speed = speed
-        self.energy = energy
-        self.size = size
-        self.vision_radius = vision_radius
+        self.vision = vision
+        self.energy = 0.5  # 50% inicial
 
-        self.dx = random.uniform(-1, 1)
-        self.dy = random.uniform(-1, 1)
+        # ---- Mutaciones ----
+        self.mutations = mutations if mutations else set()
+        self.color = color
 
-    def find_closest_food(self, foods):
-        closest_food = None
-        min_dist = float('inf')
-        for food in foods:
-            dist = ((self.x - food.x)**2 + (self.y - food.y)**2)**0.5
-            if dist < self.vision_radius and dist < min_dist:
-                min_dist = dist
-                closest_food = food
-        return closest_food
+        # Aplicar mutaciones iniciales
+        self.apply_mutations()
 
-    def move(self, width, height, foods=None):
-        target_food = None
-        if foods:
-            target_food = self.find_closest_food(foods)
+        # ---- Dirección inicial aleatoria ----
+        self.direction = [random.uniform(-1, 1), random.uniform(-1, 1)]
 
-        if target_food:
-            # Mover hacia la comida
-            dir_x = target_food.x - self.x
-            dir_y = target_food.y - self.y
-            mag = (dir_x**2 + dir_y**2)**0.5
-            if mag != 0:
-                dir_x /= mag
-                dir_y /= mag
+        # ---- Control de degradación de nivel ----
+        self.recently_downgraded = False
 
-            self.x += dir_x * self.speed
-            self.y += dir_y * self.speed
+    # -------------------
+    # Movimiento y energía
+    # -------------------
+    def move_random(self, width, height):
+        self.direction[0] += random.uniform(-0.2, 0.2)
+        self.direction[1] += random.uniform(-0.2, 0.2)
 
-            # Actualizar direccion para suavizar movimiento cuando no haya comida
-            self.dx = dir_x
-            self.dy = dir_y
-        else:
-            # Movimiento aleatorio con direccion acumulativa
-            self.dx += random.uniform(-0.2, 0.2)
-            self.dy += random.uniform(-0.2, 0.2)
-            mag = (self.dx**2 + self.dy**2)**0.5
-            if mag != 0:
-                self.dx /= mag
-                self.dy /= mag
+        # Normalizar
+        length = math.hypot(*self.direction)
+        if length != 0:
+            self.direction[0] /= length
+            self.direction[1] /= length
 
-            self.x += self.dx * self.speed
-            self.y += self.dy * self.speed
+        # Mover
+        self.x += self.direction[0] * self.speed
+        self.y += self.direction[1] * self.speed
 
-        # Limitar dentro de la pantalla
+        # Limitar bordes
         self.x = max(self.size, min(width - self.size, self.x))
         self.y = max(self.size, min(height - self.size, self.y))
 
-        # Reducir energia
-        self.energy -= 0.001
-        if self.energy < 0:
-            self.energy = 0
+        # Gasto energético proporcional al nivel y mutaciones
+        self.energy -= 0.001 * self.size_level * self.energy_cost_factor
+        self.energy = max(0.0, self.energy)
 
-    def draw(self, surface, bg_color, vision_radius=None):
-        pygame.draw.circle(surface, self.color, (int(self.x), int(self.y)), self.size)
-        inner_radius = int(self.size * (1 - self.energy))
-        if inner_radius > 0:
-            pygame.draw.circle(surface, bg_color, (int(self.x), int(self.y)), inner_radius)
-        if vision_radius:
-            pygame.draw.circle(surface, (100, 100, 255), (int(self.x), int(self.y)), vision_radius, 1)
+        self.lower_if_low_energy()
+
+    # -------------------
+    # Crecimiento / Decrecimiento
+    # -------------------
+    def grow_if_ready(self):
+        """
+        Sube de nivel cuando energía >= 0.75, hasta máximo.
+        Al crecer, gasta parte de la energía pero no queda vacío.
+        """
+        if self.energy >= 0.75 and self.size_level < self.max_level:
+            self.size_level += 1
+            self.size = self.size_level * self.size_step
+            self.update_stats()
+
+            # Tras subir, energía baja a 50% (costo de crecimiento)
+            self.energy = 0.5
+
+
+    def lower_if_low_energy(self):
+        """
+        Baja de nivel si energía < 25%.
+        Al bajar, recupera energía al 100% para evitar efecto cascada.
+        """
+        if self.energy < 0.25 and self.size_level > 1 and not self.recently_downgraded:
+            self.size_level -= 1
+            self.size = self.size_level * self.size_step
+            self.update_stats()
+
+            # Recuperar energía al 100% al bajar nivel
+            self.energy = 1.0
+
+            self.recently_downgraded = True
+
+        # Resetea la bandera cuando recupera energía > 50%
+        if self.energy > 0.5:
+            self.recently_downgraded = False
+
+
+    # -------------------
+    # Actualización de stats
+    # -------------------
+    def update_stats(self):
+        """Penalización por nivel y ajuste de visión."""
+        # Velocidad base penalizada
+        self.speed = self.base_speed * (1 - 0.1 * (self.size_level - 1))
+
+        # Visión aumenta con nivel (10% por nivel extra)
+        self.vision = self.base_vision * (1 + 0.1 * (self.size_level - 1))
+
+        # Reaplicar mutaciones (afectan velocidad, visión y consumo)
+        self.apply_mutations()
+
+    # -------------------
+    # Mutaciones
+    # -------------------
+    def apply_mutations(self):
+        """Ajusta stats y color según mutaciones activas."""
+        # Reset stats base de velocidad y visión
+        self.speed = self.base_speed * (1 - 0.1 * (self.size_level - 1))
+        self.vision = self.base_vision * (1 + 0.1 * (self.size_level - 1))
+        energy_factor = 1.0
+
+        # Mutación roja: +20% speed, +20% consumo
+        if 'red' in self.mutations:
+            self.speed *= 1.2
+            energy_factor *= 1.2
+
+        # Mutación azul: +30% visión, -10% velocidad
+        if 'blue' in self.mutations:
+            self.vision *= 1.3
+            self.speed *= 0.9
+
+        # Mutación verde: -20% consumo, -10% velocidad
+        if 'green' in self.mutations:
+            energy_factor *= 0.8
+            self.speed *= 0.9
+
+        self.energy_cost_factor = energy_factor
+
+        # Color combinado por mutaciones
+        self.color = self.mix_colors()
+
+    def mix_colors(self):
+        """Combina colores según mutaciones presentes."""
+        base_colors = {
+            'red': (255, 0, 0),
+            'blue': (0, 0, 255),
+            'green': (0, 255, 0)
+        }
+        r, g, b = 0, 0, 0
+        for m in self.mutations:
+            cr, cg, cb = base_colors[m]
+            r = min(255, r + cr)
+            g = min(255, g + cg)
+            b = min(255, b + cb)
+        return (r, g, b) if self.mutations else (200, 200, 200)
+
+    # -------------------
+    # Visión (debug visual)
+    # -------------------
+    def draw_vision(self, screen):
+        pygame.draw.circle(screen, (80, 80, 80), (int(self.x), int(self.y)), int(self.vision), 1)
+
+    # -------------------
+    # Reproducción genérica
+    # -------------------
+    def reproduce(self, mutation_chance=0.3):
+        """
+        Genera un nuevo organismo hijo con posibles mutaciones heredadas.
+        """
+        new_mutations = set(self.mutations)
+
+        # Probabilidad de mutación nueva
+        if random.random() < mutation_chance:
+            possible = ['red', 'blue', 'green']
+            available = [m for m in possible if m not in new_mutations]
+            if available:
+                new_mutations.add(random.choice(available))
+
+        # Posición cercana al progenitor
+        offset_x = random.randint(-15, 15)
+        offset_y = random.randint(-15, 15)
+
+        return self.__class__(self.x + offset_x, self.y + offset_y, self.mix_colors(), mutations=new_mutations)
+
