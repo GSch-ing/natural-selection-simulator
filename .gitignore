@@ -19,3 +19,14 @@ Thumbs.db
 
 # Archivos de pruebas o backups
 *.bak
+
+# Archivos generados por Jupyter notebooks (si usás)
+.ipynb_checkpoints/
+
+# Archivos de cobertura de tests
+.coverage
+htmlcov/
+
+# Archivos de configuración local de PyCharm (si usás)
+.idea/
+
